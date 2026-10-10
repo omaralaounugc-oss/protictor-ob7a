@@ -41,6 +41,7 @@
   textarea { min-height:340px; margin-top:10px; font:13px/1.5 ui-monospace,Consolas,monospace; resize:vertical; white-space:pre; }
   .row { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
   .row .grow { flex:1; }
+  .raw { margin-top:12px; } .raw label { display:flex; gap:8px; align-items:center; } .raw input[type=checkbox] { width:auto; } #rawbox { margin-top:8px; } #rawbox .row { margin-top:8px; }
   #msg { color:var(--mute); margin-left:auto; align-self:center; }
 </style>
 </head>
@@ -60,7 +61,7 @@
 <div id="app" hidden>
   <header>
     <b>Proctor</b>
-    <div><span id="who"></span><button id="out">Sign out</button></div>
+    <div><span id="who"></span><button id="tok">GitHub token</button> <button id="out">Sign out</button></div>
   </header>
   <main>
     <aside>
@@ -71,6 +72,13 @@
     <section id="editor" hidden>
       <input id="name" placeholder="Script name" maxlength="80" aria-label="Script name">
       <textarea id="code" spellcheck="false" placeholder="Paste or write your script here" aria-label="Script content"></textarea>
+      <div class="raw">
+        <label><input type="checkbox" id="israw"> Public raw link (anyone with the link can read this script)</label>
+        <div id="rawbox" hidden>
+          <input id="rawurl" readonly aria-label="Raw link">
+          <div class="row"><button id="copyurl">Copy link</button><button id="copyls">Copy loadstring</button></div>
+        </div>
+      </div>
       <div class="row">
         <button class="primary" id="save">Save changes</button>
         <button id="copy">Copy script</button>
@@ -97,6 +105,32 @@ const app = initializeApp({
 });
 const auth = getAuth(app), db = getFirestore(app);
 const $ = id => document.getElementById(id);
+const OWNER = location.hostname.split(".")[0], REPO = location.pathname.split("/")[1];
+const tok = () => { try { return localStorage.getItem("ghtok"); } catch { return null; } };
+const rawUrl = id => `https://raw.githubusercontent.com/${OWNER}/${REPO}/main/scripts/${id}.txt`;
+const gh = (path, opts = {}) => fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}`, { cache: "no-store", ...opts,
+  headers: { Authorization: `Bearer ${tok()}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" } });
+async function fileSha(path) { const r = await gh(path + "?ref=main"); return r.ok ? (await r.json()).sha : null; }
+async function putFile(id, text) {
+  const path = `scripts/${id}.txt`, sha = await fileSha(path);
+  const body = { message: "Update script", branch: "main", content: btoa(unescape(encodeURIComponent(text))) };
+  if (sha) body.sha = sha;
+  const r = await gh(path, { method: "PUT", body: JSON.stringify(body) });
+  if (!r.ok) throw new Error("GitHub refused the token. Create a new one with Contents read and write.");
+}
+async function rmFile(id) {
+  const path = `scripts/${id}.txt`, sha = await fileSha(path);
+  if (sha) await gh(path, { method: "DELETE", body: JSON.stringify({ message: "Remove script", sha, branch: "main" }) });
+}
+function showRaw() {
+  const on = $("israw").checked && current && current.id;
+  $("rawbox").hidden = !on;
+  if (on) $("rawurl").value = rawUrl(current.id);
+}
+$("israw").onchange = showRaw;
+$("copyurl").onclick = () => navigator.clipboard.writeText($("rawurl").value).then(() => flash("Link copied"));
+$("copyls").onclick = () => navigator.clipboard.writeText(`loadstring(game:HttpGet("${$("rawurl").value}"))()`).then(() => flash("Loadstring copied"));
+$("tok").onclick = () => { const t = prompt("Paste your GitHub token. It stays in this browser only."); if (t) { localStorage.setItem("ghtok", t.trim()); flash("Token saved"); } };
 
 let uid = null, items = [], current = null; // current = {id|null, name, code}
 
@@ -141,25 +175,30 @@ function render() {
 }
 
 function open(s) {
-  current = { id: s.id, name: s.name, code: s.code };
+  current = { id: s.id, name: s.name, code: s.code, raw: !!s.raw };
   $("name").value = s.name || ""; $("code").value = s.code || "";
+  $("israw").checked = !!s.raw; showRaw();
   render();
 }
 
 $("add").onclick = () => {
   current = { id: null, name: "", code: "" };
-  $("name").value = ""; $("code").value = "";
+  $("name").value = ""; $("code").value = ""; $("israw").checked = false; showRaw();
   render(); $("name").focus();
 };
 
 $("save").onclick = async () => {
   if (!current) return;
-  const data = { name: $("name").value.trim() || "Untitled", code: $("code").value, updated: serverTimestamp() };
+  const raw = $("israw").checked;
+  const data = { name: $("name").value.trim() || "Untitled", code: $("code").value, raw, updated: serverTimestamp() };
+  if (raw && !tok()) { flash("Select GitHub token at the top and paste your token first."); return; }
   try {
     if (current.id) await setDoc(doc(db, "users", uid, "scripts", current.id), data);
     else current.id = (await addDoc(col(), data)).id;
-    await load(); flash("Saved");
-  } catch { flash("Could not save. Check your connection and try again."); }
+    if (raw) await putFile(current.id, data.code); else if (current.raw) await rmFile(current.id);
+    current.raw = raw;
+    await load(); showRaw(); flash("Saved");
+  } catch (e) { flash(e.message || "Could not save. Check your connection and try again."); }
 };
 
 $("copy").onclick = async () => {
@@ -171,7 +210,7 @@ $("del").onclick = async () => {
   if (!current) return;
   if (current.id) {
     if (!confirm("Delete this script? This can't be undone.")) return;
-    try { await deleteDoc(doc(db, "users", uid, "scripts", current.id)); } catch { flash("Could not delete."); return; }
+    try { if (current.raw && tok()) await rmFile(current.id); await deleteDoc(doc(db, "users", uid, "scripts", current.id)); } catch { flash("Could not delete."); return; }
   }
   current = null; await load();
 };
