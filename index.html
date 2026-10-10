@@ -61,7 +61,7 @@
 <div id="app" hidden>
   <header>
     <b>Proctor</b>
-    <div><span id="who"></span><button id="tok">GitHub token</button> <button id="out">Sign out</button></div>
+    <div><span id="who"></span><button id="dom">Link domain</button> <button id="tok">GitHub token</button> <button id="out">Sign out</button></div>
   </header>
   <main>
     <aside>
@@ -73,7 +73,7 @@
       <input id="name" placeholder="Script name" maxlength="80" aria-label="Script name">
       <textarea id="code" spellcheck="false" placeholder="Paste or write your script here" aria-label="Script content"></textarea>
       <div class="raw">
-        <label><input type="checkbox" id="israw"> Public raw link (anyone with the link can read this script)</label>
+        <label><input type="checkbox" id="israw"> Public raw link (browsers are redirected, executors get the script)</label>
         <div id="rawbox" hidden>
           <input id="rawurl" readonly aria-label="Raw link">
           <div class="row"><button id="copyurl">Copy link</button><button id="copyls">Copy loadstring</button></div>
@@ -107,7 +107,8 @@ const auth = getAuth(app), db = getFirestore(app);
 const $ = id => document.getElementById(id);
 const OWNER = location.hostname.split(".")[0], REPO = location.pathname.split("/")[1];
 const tok = () => { try { return localStorage.getItem("ghtok"); } catch { return null; } };
-const rawUrl = id => `https://raw.githubusercontent.com/${OWNER}/${REPO}/main/scripts/${id}.txt`;
+const base = () => { try { return localStorage.getItem("wbase"); } catch { return null; } };
+const rawUrl = id => base() ? `${base().replace(/\/+$/, "")}/${id}` : `https://raw.githubusercontent.com/${OWNER}/${REPO}/main/scripts/${id}.txt`;
 const gh = (path, opts = {}) => fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}`, { cache: "no-store", ...opts,
   headers: { Authorization: `Bearer ${tok()}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" } });
 async function fileSha(path) { const r = await gh(path + "?ref=main"); return r.ok ? (await r.json()).sha : null; }
@@ -130,6 +131,7 @@ function showRaw() {
 $("israw").onchange = showRaw;
 $("copyurl").onclick = () => navigator.clipboard.writeText($("rawurl").value).then(() => flash("Link copied"));
 $("copyls").onclick = () => navigator.clipboard.writeText(`loadstring(game:HttpGet("${$("rawurl").value}"))()`).then(() => flash("Loadstring copied"));
+$("dom").onclick = () => { const t = prompt("Paste your Cloudflare Worker link (like https://proctor.yourname.workers.dev)"); if (t) { localStorage.setItem("wbase", t.trim()); showRaw(); flash("Link domain saved"); } };
 $("tok").onclick = () => { const t = prompt("Paste your GitHub token. It stays in this browser only."); if (t) { localStorage.setItem("ghtok", t.trim()); flash("Token saved"); } };
 
 let uid = null, items = [], current = null; // current = {id|null, name, code}
